@@ -65,21 +65,100 @@ Implementation of a basic ONE node on ESP32 microcontroller, serving as an IoT e
 - Enable basic user interaction
 
 ## Technical Considerations
-1. Memory constraints of ESP32
-2. Persistent storage handling
-3. Power management
-4. Network security
-5. Recovery mechanisms
-6. Adaptation of ONE patterns to ESP32 constraints
-7. Hardware crypto capabilities:
+
+### Memory Management
+1. ESP32 Memory Constraints:
+   - DRAM: ~328KB available
+   - IRAM: ~128KB for time-critical code
+   - Flash: Up to 4MB for program storage
+   - PSRAM: Optional external RAM support
+
+2. Memory Optimization Strategies:
+   - Use PROGMEM for constant data
+   - Implement chunked processing for large objects
+   - Utilize stack allocation for temporary buffers
+   - Enable PSRAM if available for large datasets
+   - Implement circular buffers for streaming data
+
+3. Buffer Management:
+   - WebSocket buffer size: 4KB default, configurable
+   - JSON document fragmentation: 2KB chunks
+   - File system buffer: 512 bytes per operation
+   - Stream buffer sizes: 256 bytes to 1KB based on operation
+
+### Hardware Capabilities
+1. Crypto Acceleration:
    - SHA-256 hardware acceleration
    - AES-128/192/256
    - RSA up to 4096 bits
    - Hardware Random Number Generator
 
+2. Network:
+   - WiFi 802.11 b/g/n
+   - Bluetooth 4.2
+   - Dual-core for network processing
+
+3. Storage:
+   - SPI Flash: 4MB minimum recommended
+   - Optional SD card support
+   - SPIFFS/LittleFS file systems
+
+## Build Verification
+
+### Pre-build Checks
+1. Memory Configuration:
+   ```ini
+   build_flags =
+       -DCONFIG_SPIRAM_SUPPORT
+       -DCONFIG_SPIRAM_USE_MALLOC
+       -DCONFIG_SPIRAM_TYPE_AUTO
+       -DCONFIG_SPIRAM_SIZE=-1
+   ```
+
+2. Partition Table:
+   - Minimum 1MB for app
+   - 1MB for SPIFFS
+   - 32KB for NVS
+
+### Build Steps
+1. Clean Build:
+   ```bash
+   pio run --target clean
+   pio run
+   ```
+
+2. Memory Analysis:
+   ```bash
+   pio run --target size
+   ```
+
+3. Stack Analysis:
+   ```bash
+   pio check --pattern="src/*"
+   ```
+
+### Common Build Issues
+1. Memory Overflow:
+   - Symptom: Stack overflow or heap fragmentation
+   - Solution: Enable PSRAM or adjust buffer sizes
+
+2. Flash Size:
+   - Symptom: "Flash full" error
+   - Solution: Optimize partition table or reduce program size
+
+3. Compilation Errors:
+   - Symptom: C++ version mismatch
+   - Solution: Ensure -std=gnu++17 flag is set
+
+4. Link Errors:
+   - Symptom: Undefined references
+   - Solution: Check library dependencies and versions
+
 ## Initial Focus
-Start with Phase 0: Creating libonecore and basic object system.
-Study reference implementations from one.core and one.models for patterns to adapt.
+1. Memory optimization for object system
+2. Efficient HTML+Microdata handling
+3. Secure communication implementation
+4. Storage system optimization
 
 ## Questions to Address
 1. Storage strategy for HTML+Microdata objects

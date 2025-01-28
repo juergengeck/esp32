@@ -1,0 +1,24 @@
+#pragma once
+
+namespace chum {
+namespace config {
+
+// Network configuration
+constexpr char WIFI_SSID[] = "your_ssid_here";
+constexpr char WIFI_PASSWORD[] = "your_password_here";
+constexpr char WEBSOCKET_URL[] = "your_websocket_url_here";
+
+// Bluetooth configuration
+constexpr char BT_DEVICE_NAME[] = "CHUM_DEVICE";
+constexpr uint32_t BT_SCAN_INTERVAL = 5000;  // milliseconds
+
+// ESP-NOW configuration
+constexpr uint32_t ESPNOW_CHANNEL = 1;
+constexpr uint8_t ESPNOW_ENCRYPT_KEY[] = "your_32_byte_encryption_key_here";
+
+// Security configuration
+constexpr char ROOT_CA_CERT[] = "your_root_ca_cert_here";
+constexpr uint32_t KEY_ROTATION_INTERVAL = 86400;  // 24 hours in seconds
+
+} // namespace config
+} // namespace chum 

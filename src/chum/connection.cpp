@@ -1,125 +1,138 @@
 #include "connection.h"
-#include <Arduino.h>
+#include "websocket_wrapper.h"
+#include "message_serializer.h"
+#include <WiFi.h>
+#include "websocket_types.h"
 
 namespace chum {
 
-Connection::Connection()
-    : server_(nullptr)
-    , client_(nullptr)
+struct Connection::WebSocketImpl {
+    std::unique_ptr<WebSocketWrapper> server;
+    std::unique_ptr<WebSocketWrapper> client;
+    
+    WebSocketImpl() : server(nullptr), client(nullptr) {}
+    ~WebSocketImpl() {
+        if (server) server->disconnect();
+        if (client) client->disconnect();
+    }
+};
+
+Connection::Connection() 
+    : impl_(std::make_unique<WebSocketImpl>())
     , state_(ConnectionState::NotConnected)
     , lastHeartbeat_(0)
-    , messageCallback_(nullptr)
-    , stateCallback_(nullptr) {
-}
+    , securityInitialized_(false) {}
 
-Connection::~Connection() {
-    stopServer();
-    disconnect();
-    delete server_;
-    delete client_;
-}
+Connection::~Connection() = default;
 
 bool Connection::initServer(uint16_t port) {
-    if (state_ != ConnectionState::NotConnected) {
-        return false;
+    if (impl_->server) {
+        return false;  // Already initialized
     }
 
-    if (!server_) {
-        server_ = new WebSocketsServer(port);
-    }
+    impl_->server = std::make_unique<WebSocketWrapper>();
+    impl_->server->begin("0.0.0.0", port, "/");
+    
+    // Create a strongly-typed event handler
+    WebSocketWrapper::EventHandler serverHandler = 
+        [this](chum::WSEventType event, const uint8_t* payload, size_t length) {
+            this->handleWebSocketEvent(event, payload, length);
+        };
+    impl_->server->onEvent(serverHandler);
 
-    server_->onEvent([this](uint8_t num, WStype_t type, uint8_t* payload, size_t length) {
-        handleWebSocketEvent(type, payload, length);
-    });
-
-    server_->begin();
-    setState(ConnectionState::Connecting);
+    setState(ConnectionState::Connected);  // Server is always in Connected state when running
+    startHeartbeat();
     return true;
 }
 
 void Connection::stopServer() {
-    if (server_) {
-        server_->close();
+    if (impl_->server) {
+        impl_->server->disconnect();
+        impl_->server.reset();
         setState(ConnectionState::NotConnected);
+        stopHeartbeat();
     }
 }
 
 bool Connection::connectToPeer(const char* host, uint16_t port) {
-    if (state_ != ConnectionState::NotConnected) {
-        return false;
+    if (impl_->client) {
+        return false;  // Already connected
     }
 
-    if (!client_) {
-        client_ = new WebSocketsClient();
-    }
+    impl_->client = std::make_unique<WebSocketWrapper>();
+    impl_->client->begin(host, port, "/");
+    
+    // Create a strongly-typed event handler
+    WebSocketWrapper::EventHandler clientHandler = 
+        [this](chum::WSEventType event, const uint8_t* payload, size_t length) {
+            this->handleWebSocketEvent(event, payload, length);
+        };
+    impl_->client->onEvent(clientHandler);
 
-    client_->onEvent([this](WStype_t type, uint8_t* payload, size_t length) {
-        handleWebSocketEvent(type, payload, length);
-    });
-
-    client_->begin(host, port, "/");
     setState(ConnectionState::Connecting);
     return true;
 }
 
 void Connection::disconnect() {
-    if (client_) {
-        client_->disconnect();
+    if (impl_->client) {
+        impl_->client->disconnect();
+        impl_->client.reset();
     }
     setState(ConnectionState::NotConnected);
     stopHeartbeat();
 }
 
 bool Connection::sendMessage(MessageType type, const uint8_t* data, size_t length) {
-    if (state_ != ConnectionState::Connected) {
+    if (!isConnected()) {
+        // Queue message for later
+        messageQueue_.push({type, data, length});
         return false;
     }
 
-    // Create message header (type + length)
-    uint8_t header[3];
-    header[0] = static_cast<uint8_t>(type);
-    header[1] = length & 0xFF;
-    header[2] = (length >> 8) & 0xFF;
-
-    // Send header
-    if (client_) {
-        client_->sendBinary(header, 3);
-        if (length > 0) {
-            client_->sendBinary(data, length);
+    std::vector<uint8_t> encrypted;
+    if (securityInitialized_) {
+        auto signature = security_->sign(data, length);
+        if (signature.empty()) {
+            return false;
         }
-    } else if (server_) {
-        server_->broadcastBIN(header, 3);
-        if (length > 0) {
-            server_->broadcastBIN(data, length);
-        }
+        
+        Message msg{
+            .type = type,
+            .payload = std::vector<uint8_t>(data, data + length),
+            .signature = signature
+        };
+        
+        auto serialized = MessageSerializer::serializeMessage(msg);
+        data = serialized.data();
+        length = serialized.size();
     }
 
-    return true;
+    bool sent = false;
+    if (impl_->client) {
+        sent = impl_->client->sendBIN(data, length);
+    } else if (impl_->server) {
+        sent = impl_->server->sendBIN(data, length);
+    }
+
+    return sent;
 }
 
 void Connection::setMessageCallback(MessageCallback callback) {
-    messageCallback_ = callback;
+    messageCallback_ = std::move(callback);
 }
 
 void Connection::setStateCallback(StateCallback callback) {
-    stateCallback_ = callback;
+    stateCallback_ = std::move(callback);
 }
 
 void Connection::update() {
-    if (server_) {
-        server_->loop();
-    }
-    if (client_) {
-        client_->loop();
-    }
+    // WebSocket events are handled by ESP32's event loop
+    // No need to call loop() explicitly
 
     // Handle heartbeat
-    if (state_ == ConnectionState::Connected) {
-        uint32_t now = millis();
-        if (now - lastHeartbeat_ >= HEARTBEAT_INTERVAL) {
-            sendMessage(MessageType::HEARTBEAT, nullptr, 0);
-            lastHeartbeat_ = now;
-        }
+    if (isConnected() && millis() - lastHeartbeat_ >= HEARTBEAT_INTERVAL) {
+        sendMessage(MessageType::Data, nullptr, 0);  // Use Data type for heartbeat
+        lastHeartbeat_ = millis();
     }
 
     processMessageQueue();
@@ -133,51 +146,11 @@ ConnectionState Connection::getState() const {
     return state_;
 }
 
-void Connection::handleWebSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
-    switch (type) {
-        case WStype_CONNECTED:
-            setState(ConnectionState::Connected);
-            startHeartbeat();
-            break;
-
-        case WStype_DISCONNECTED:
-            setState(ConnectionState::NotConnected);
-            stopHeartbeat();
-            break;
-
-        case WStype_BIN:
-            if (length >= 3) { // Minimum length for header
-                MessageType msgType = static_cast<MessageType>(payload[0]);
-                uint16_t msgLength = (payload[2] << 8) | payload[1];
-                
-                if (length >= msgLength + 3) { // Full message received
-                    Message msg = {
-                        .type = msgType,
-                        .length = msgLength,
-                        .data = (msgLength > 0) ? &payload[3] : nullptr
-                    };
-                    
-                    if (messageCallback_) {
-                        messageCallback_(msg);
-                    }
-                }
-            }
-            break;
-
-        case WStype_ERROR:
-            // Handle error
-            break;
-
-        default:
-            break;
-    }
-}
-
 void Connection::setState(ConnectionState newState) {
     if (state_ != newState) {
         state_ = newState;
         if (stateCallback_) {
-            stateCallback_(state_);
+            stateCallback_(newState);
         }
     }
 }
@@ -191,14 +164,92 @@ void Connection::stopHeartbeat() {
 }
 
 void Connection::processMessageQueue() {
-    while (!messageQueue_.empty() && state_ == ConnectionState::Connected) {
-        const Message& msg = messageQueue_.front();
+    while (!messageQueue_.empty() && isConnected()) {
+        const auto& msg = messageQueue_.front();
         if (sendMessage(msg.type, msg.data, msg.length)) {
             messageQueue_.pop();
         } else {
-            break;
+            break;  // Failed to send, try again later
         }
     }
+}
+
+void Connection::handleWebSocketEvent(WSEventType type, const uint8_t* payload, size_t length) {
+    switch (type) {
+        case WEBSOCKET_EVENT_CONNECTED:
+            setState(ConnectionState::Connected);
+            if (securityInitialized_) {
+                // Send our public key
+                const auto& keyPair = security_->getKeyPair();
+                sendMessage(MessageType::KeyExchange,
+                          keyPair.publicKey.data(),
+                          keyPair.publicKey.size());
+            }
+            break;
+
+        case WEBSOCKET_EVENT_DISCONNECTED:
+            setState(ConnectionState::NotConnected);
+            break;
+
+        case WEBSOCKET_EVENT_DATA:
+            if (length > 0) {
+                auto msg = MessageSerializer::deserializeMessage(payload, length);
+                if (msg) {
+                    if (msg->type == MessageType::KeyExchange) {
+                        handleKeyExchange(msg->payload.data(), msg->payload.size());
+                    } else if (messageCallback_) {
+                        if (securityInitialized_ && !msg->signature.empty()) {
+                            if (security_->verify(msg->payload.data(), msg->payload.size(),
+                                               msg->signature.data(), msg->signature.size(),
+                                               peerPublicKey_)) {
+                                messageCallback_(*msg);
+                            }
+                        } else {
+                            messageCallback_(*msg);
+                        }
+                    }
+                }
+            }
+            break;
+
+        case WEBSOCKET_EVENT_ERROR:
+            Serial.println("WebSocket error occurred");
+            break;
+
+        default:
+            break;
+    }
+}
+
+bool Connection::initSecurity() {
+    if (!security_) {
+        security_ = std::make_unique<Security>();
+    }
+    securityInitialized_ = security_->generateKeyPair();
+    return securityInitialized_;
+}
+
+const KeyPair& Connection::getKeyPair() const {
+    static const KeyPair empty;
+    return security_ ? security_->getKeyPair() : empty;
+}
+
+bool Connection::handleKeyExchange(const uint8_t* data, size_t length) {
+    if (!security_ || !securityInitialized_) {
+        return false;
+    }
+
+    peerPublicKey_.assign(data, data + length);
+    return true;
+}
+
+bool Connection::verifyMessage(const Message& msg) {
+    if (!security_ || !securityInitialized_ || msg.signature.empty()) {
+        return false;
+    }
+    return security_->verify(msg.payload.data(), msg.payload.size(),
+                           msg.signature.data(), msg.signature.size(),
+                           peerPublicKey_);
 }
 
 } // namespace chum 

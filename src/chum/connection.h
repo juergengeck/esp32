@@ -1,11 +1,25 @@
 #pragma once
 
-#include <WebSocketsClient.h>
+#include <Arduino.h>
 #include <queue>
 #include <memory>
+#include <functional>
 #include "types.h"
+#include "security.h"
+#include "websocket_types.h"
+
+// Forward declarations
+class WebSocketsServer;
+class WebSocketsClient;
+enum WStype_t : uint8_t;
 
 namespace chum {
+
+struct InternalMessage {
+    MessageType type;
+    const uint8_t* data;
+    size_t length;
+};
 
 class Connection {
 public:
@@ -33,22 +47,33 @@ public:
     bool isConnected() const;
     ConnectionState getState() const;
 
+    // Security operations
+    bool initSecurity();
+    const KeyPair& getKeyPair() const;
+
 private:
-    void handleWebSocketEvent(WStype_t type, uint8_t* payload, size_t length);
+    void handleWebSocketEvent(WSEventType type, const uint8_t* payload, size_t length);
     void setState(ConnectionState newState);
     void startHeartbeat();
     void stopHeartbeat();
     void processMessageQueue();
+    
+    // Security helpers
+    bool handleKeyExchange(const uint8_t* data, size_t length);
+    bool verifyMessage(const Message& msg);
 
-    WebSocketsServer* server_;
-    WebSocketsClient* client_;
+    struct WebSocketImpl;
+    std::unique_ptr<WebSocketImpl> impl_;
     ConnectionState state_;
     uint32_t lastHeartbeat_;
     MessageCallback messageCallback_;
     StateCallback stateCallback_;
-    std::queue<Message> messageQueue_;
-    static constexpr uint32_t HEARTBEAT_INTERVAL = 10000; // 10 seconds
-    static constexpr size_t MAX_QUEUE_SIZE = 100;
+    std::unique_ptr<Security> security_;
+    bool securityInitialized_;
+    std::vector<uint8_t> peerPublicKey_;
+    std::queue<InternalMessage> messageQueue_;
+
+    static constexpr uint32_t HEARTBEAT_INTERVAL = 5000; // 5 seconds
 };
 
 } // namespace chum 

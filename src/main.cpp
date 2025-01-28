@@ -7,8 +7,13 @@
 #include <memory>
 #include "storage/storage_base.h"
 #include "storage/filesystem.h"
+#include "chum/websocket_client_impl.h"
+#include "chum/config.h"
+#include <esp_crt_bundle.h>
+#include <WiFiClientSecure.h>
 
 using namespace one::storage;
+using namespace chum;
 
 // ONE Node configuration
 #define NODE_NAME "esp32_one_node"
@@ -25,6 +30,7 @@ struct NodeState {
 
 // Global filesystem instance
 static std::unique_ptr<IFileSystem> filesystem;
+static std::unique_ptr<WebSocketClientImpl> wsClient;
 
 // LED patterns
 void flashError() {
@@ -92,10 +98,27 @@ bool initStorage() {
 }
 
 // Initialize network (will be configured later)
-bool initNetwork() {
-  // For now, just initialize WiFi in station mode
-  WiFi.mode(WIFI_STA);
-  return true;
+bool initWebSocket() {
+    // Initialize the global CA store
+    esp_err_t ret = arduino_esp_crt_bundle_attach(nullptr);
+    if (ret != ESP_OK) {
+        Serial.println("Failed to attach global CA store");
+        return false;
+    }
+
+    wsClient = std::make_unique<WebSocketClientImpl>();
+    wsClient->registerConnectionHandler([](bool connected) {
+        Serial.printf("WebSocket connection status: %s\n", connected ? "Connected" : "Disconnected");
+    });
+    wsClient->registerMessageHandler([](const Message& msg) {
+        Serial.println("Received message from server");
+    });
+    if (!wsClient->connect(config::WIFI_SSID, config::WIFI_PASSWORD, config::WEBSOCKET_URL)) {
+        Serial.println("Failed to connect to WebSocket server");
+        return false;
+    }
+    Serial.println("Successfully connected to WebSocket server");
+    return true;
 }
 
 // Test crypto capabilities
@@ -139,7 +162,7 @@ void setup() {
     nodeState.storageReady = initStorage();
     
     flashProgress();
-    nodeState.networkReady = initNetwork();
+    nodeState.networkReady = initWebSocket();
     
     flashProgress();
     nodeState.cryptoReady = initCrypto();
@@ -209,6 +232,12 @@ void loop() {
         flashError();
         delay(1000);
         return;
+    }
+    
+    // Check WebSocket connection
+    if (wsClient && !wsClient->isConnected()) {
+        Serial.println("WebSocket disconnected, attempting to reconnect...");
+        wsClient->connect(config::WIFI_SSID, config::WIFI_PASSWORD, config::WEBSOCKET_URL);
     }
     
     // Main node loop

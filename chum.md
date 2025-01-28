@@ -19,244 +19,226 @@ The ONE chum protocol is a peer-to-peer communication protocol for ESP32 nodes i
 - Peer list management
 
 ### 3. Communication Layer
-#### WebSocket Infrastructure
-- Promise-based WebSocket client/server implementation
-- Binary message support using ArrayBuffer
-- Connection state management (NotListening, Starting, Listening, ShuttingDown)
-- Heartbeat mechanism (10-second intervals)
-- Automatic reconnection handling
-
-#### Message Protocol
+#### WebSocket Configuration
 ```cpp
-enum MessageType {
-    HELLO,              // Initial connection
-    KEY_EXCHANGE,       // Security handshake
-    OBJECT_SYNC,        // Object synchronization
-    OBJECT_REQUEST,     // Request specific object
-    OBJECT_DATA,        // Object data transfer
-    HEARTBEAT,          // Connection health check
-    STORAGE_METRICS,    // Node storage status
-    ERROR              // Error reporting
+// WebSocket configuration constants
+struct WSConfig {
+    static constexpr size_t DEFAULT_RX_BUFFER_SIZE = 4096;
+    static constexpr size_t DEFAULT_TX_BUFFER_SIZE = 4096;
+    static constexpr uint32_t PING_INTERVAL_MS = 5000;
+    static constexpr uint32_t PONG_TIMEOUT_MS = 2000;
+    static constexpr uint32_t RECONNECT_INTERVAL_MS = 5000;
+    static constexpr uint8_t MAX_RECONNECT_ATTEMPTS = 5;
+    static constexpr size_t MAX_FRAME_SIZE = 8192;
+};
+
+// WebSocket event types for type-safe event handling
+enum class WStype_t {
+    DISCONNECTED,
+    CONNECTED,
+    TEXT,
+    BIN,
+    ERROR,
+    FRAGMENT_TEXT_START,
+    FRAGMENT_BIN_START,
+    FRAGMENT,
+    FRAGMENT_FIN,
+    PING,
+    PONG
+};
+
+// WebSocket client wrapper for reliable communication
+class WebSocketClient {
+public:
+    // Connection management
+    bool connect(const char* ssid, const char* password, const char* wsUrl);
+    void disconnect();
+    bool isConnected() const;
+
+    // Message handling with automatic retries
+    bool sendMessage(const Message& msg);
+    void registerMessageHandler(std::function<void(const Message&)> handler);
+    void registerConnectionHandler(std::function<void(bool)> handler);
+
+    // Must be called regularly to handle events and retries
+    void update();
+
+private:
+    // Message queue for reliability
+    struct QueuedMessage {
+        Message msg;
+        uint32_t retryCount;
+        uint32_t lastTryTime;
+    };
+    std::vector<QueuedMessage> messageQueue_;
+
+    // Constants
+    static constexpr uint32_t WIFI_TIMEOUT_MS = 10000;      // 10 seconds
+    static constexpr uint32_t WEBSOCKET_PING_INTERVAL = 5000; // 5 seconds
+    static constexpr uint32_t MESSAGE_RETRY_INTERVAL = 1000;  // 1 second
+    static constexpr uint32_t MAX_RETRY_COUNT = 3;
 };
 ```
 
-#### Connection Management
-- Connection pooling and lifecycle management
-- Message queuing system
-- Error handling and recovery
-- Connection state monitoring
-- Graceful shutdown procedures
+### Memory Management
+1. Buffer Configuration:
+   ```cpp
+   // In platformio.ini
+   build_flags =
+       -DWS_RX_BUFFER_SIZE=4096
+       -DWS_TX_BUFFER_SIZE=4096
+       -DWS_MAX_QUEUED_MESSAGES=50
+   ```
 
-### 4. Object Exchange
-- Object synchronization protocol
-- Chunked data transfer
-- Progress tracking
-- Integrity verification
-- Bandwidth management
+2. Memory Optimization:
+   - Use of circular buffers for message queuing
+   - Fragmentation of large messages
+   - PSRAM utilization when available
+   - Stack-based allocation for temporary buffers
 
-### 5. Security Layer
-- TLS for transport security
-- Node authentication
-- Message encryption using public/private keys
-- Key exchange mechanism
-- Trust establishment
+3. Resource Cleanup:
+   ```cpp
+   class ResourceGuard {
+       std::function<void()> cleanup_;
+   public:
+       ResourceGuard(std::function<void()> cleanup) : cleanup_(cleanup) {}
+       ~ResourceGuard() { if(cleanup_) cleanup_(); }
+   };
+   ```
+
+### Error Handling and Recovery
+1. Connection Issues:
+   ```cpp
+   enum class WSError {
+       NONE,
+       CONNECTION_FAILED,
+       AUTHENTICATION_FAILED,
+       TIMEOUT,
+       BUFFER_OVERFLOW,
+       PROTOCOL_ERROR
+   };
+   ```
+
+2. Recovery Mechanisms:
+   - Automatic reconnection with exponential backoff
+   - Message queue persistence
+   - Session state recovery
+   - Connection health monitoring
 
 ## Implementation Phases
 
-### Phase 1: Node Identity & Basic Discovery
-1. Node Identity Implementation
+### Phase 1: WebSocket Communication Layer ✓
+- Reliable message delivery
+- Automatic reconnection
+- Buffer management
+- Error handling
+
+### Phase 2: Node Identity & Discovery (In Progress)
+- Unique node identification
+- Network presence management
+- Peer discovery
+- Service advertisement
+
+### Phase 3: Object Exchange Protocol (Pending)
+- Object synchronization
+- Chunked transfer
+- Progress tracking
+- Integrity verification
+
+### Phase 4: Security Implementation (Pending)
+- TLS/SSL integration
+- Key exchange
+- Message encryption
+- Trust verification
+
+## Troubleshooting Guide
+
+### Common Issues
+
+1. Connection Problems
+   - Symptom: Frequent disconnections
+   - Check: Network stability, buffer sizes
+   - Solution: Adjust reconnection parameters, increase buffer sizes
+
+2. Memory Issues
+   - Symptom: Heap fragmentation, crashes
+   - Check: Memory usage patterns, buffer configurations
+   - Solution: Enable PSRAM, optimize buffer sizes
+
+3. Message Delivery
+   - Symptom: Lost or duplicate messages
+   - Check: Queue size, retry configuration
+   - Solution: Adjust retry parameters, implement deduplication
+
+4. Performance
+   - Symptom: Slow message processing
+   - Check: Buffer sizes, message fragmentation
+   - Solution: Optimize message size, adjust buffer configuration
+
+### Debugging Tools
+
+1. Memory Analysis
    ```cpp
-   struct NodeIdentity {
-       String instanceId;
-       String nodeType;
-       uint32_t capabilities;
-       StorageMetrics storage;
-       uint32_t uptime;
-       uint8_t status;
-   };
+   void printMemoryStats() {
+       Serial.printf("Free heap: %d\n", ESP.getFreeHeap());
+       Serial.printf("Max alloc heap: %d\n", ESP.getMaxAllocHeap());
+       Serial.printf("PSRAM: %d\n", ESP.getPsramSize());
+   }
    ```
 
-2. Local Network Discovery
+2. Connection Monitoring
    ```cpp
-   class NodeDiscovery {
-       void startBroadcast();
-       void handleDiscoveryMessage();
-       void updatePeerList();
-       void advertiseMDNS();
-   };
+   void monitorConnection() {
+       Serial.printf("WiFi RSSI: %d\n", WiFi.RSSI());
+       Serial.printf("Connection state: %d\n", client.getState());
+       Serial.printf("Queued messages: %d\n", client.queueSize());
+   }
    ```
 
-### Phase 2: Communication Infrastructure
-1. WebSocket Implementation
+3. Performance Metrics
    ```cpp
-   class ChumConnection {
-   private:
-       WebSocket webSocket;
-       MessageQueue messageQueue;
-       ConnectionState state;
-       uint32_t lastHeartbeat;
-       
-   public:
-       void initServer();
-       void connectToPeer();
-       Promise<void> sendMessage(MessageType type, const uint8_t* data, size_t length);
-       void handleMessage(const uint8_t* data, size_t length);
-       void maintainConnection();
-       void startHeartbeat();
-       bool isConnected() const;
-   };
-   ```
-
-2. Message Protocol
-   ```cpp
-   class MessageHandler {
-   private:
-       ChumConnection& connection;
-       
-   public:
-       Promise<void> sendHello();
-       Promise<void> exchangeKeys();
-       Promise<void> syncObjects();
-       Promise<void> requestObject(const String& hash);
-       Promise<void> sendObject(const String& hash, const uint8_t* data, size_t length);
-       void handleIncomingMessage(MessageType type, const uint8_t* data, size_t length);
-   };
-   ```
-
-### Phase 3: Object Exchange Protocol
-1. Object Synchronization
-   ```cpp
-   class ObjectSync {
-       void announceObjects();
-       void requestObject();
-       void sendObject();
-       void receiveObject();
-   };
-   ```
-
-2. Transfer Management
-   ```cpp
-   class TransferManager {
-       void startTransfer();
-       void handleChunk();
-       void verifyIntegrity();
-       void resumeTransfer();
-   };
-   ```
-
-### Phase 4: Security Implementation
-1. Security Layer
-   ```cpp
-   class ChumSecurity {
-       void initTLS();
-       void authenticatePeer();
-       void encryptMessage();
-       void verifyMessage();
-   };
-   ```
-
-2. Trust Management
-   ```cpp
-   class TrustManager {
-       void establishTrust();
-       void verifyTrust();
-       void updateTrustLevel();
+   struct Metrics {
+       uint32_t messagesSent;
+       uint32_t messagesReceived;
+       uint32_t retries;
+       uint32_t reconnections;
+       uint32_t avgProcessingTime;
    };
    ```
 
 ## Testing Strategy
 
 ### Unit Tests
-1. Node Identity Tests
-   - Identity generation
-   - Capability reporting
-   - State management
+1. WebSocket Layer Tests
+   - Event handling
+   - Message formatting
+   - Connection management
+   - Buffer handling
+   - Retry mechanism
 
-2. WebSocket Tests
-   - Connection establishment
-   - Message serialization/deserialization
-   - Heartbeat functionality
-   - Reconnection handling
-   - Error recovery
-
-3. Communication Tests
-   - Message protocol compliance
-   - Queue management
-   - Connection pool management
-   - Binary message handling
-
-4. Object Exchange Tests
-   - Sync protocol
-   - Transfer reliability
-   - Integrity checks
-
-5. Security Tests
-   - Authentication
-   - Encryption
-   - Trust verification
+2. Protocol Tests
+   - Message types
+   - Binary formatting
+   - Validation
+   - Error handling
+   - Version compatibility
 
 ### Integration Tests
-1. Multi-Node Tests
-   - Node discovery
+1. End-to-End Tests
    - Connection establishment
-   - Object synchronization
+   - Message exchange
+   - Error recovery
+   - Performance metrics
 
-2. Network Tests
-   - Different network conditions
-   - Connection recovery
-   - Bandwidth adaptation
-
-3. Load Tests
-   - Multiple concurrent transfers
-   - Large object handling
-   - Resource management
-
-## Performance Considerations
-
-### Memory Management
-- Connection pool size limits
-- Object chunk size optimization
-- Buffer management
-- Resource cleanup
-
-### Network Optimization
-- Message batching
-- Compression
-- Bandwidth throttling
-- Connection pooling
-
-### Power Efficiency
-- Sleep mode during inactivity
-- Efficient polling intervals
-- Batch processing
-- Radio power management
-
-## Error Handling
-
-### Network Errors
-- Connection loss recovery
-- Timeout handling
-- Retry mechanisms
-- Circuit breaker implementation
-
-### Protocol Errors
-- Message validation
-- State recovery
-- Protocol version mismatch
-- Malformed data handling
-
-### Security Errors
-- Authentication failures
-- Trust violations
-- Encryption errors
-- Certificate validation
+2. Load Tests
+   - Multiple connections
+   - Large messages
+   - Network stress
+   - Memory usage
 
 ## Next Steps
-1. Implement WebSocket infrastructure
-2. Set up message protocol
-3. Add connection management
-4. Implement object synchronization
-5. Integrate security layer
-6. Comprehensive testing
-7. Performance optimization
-8. Documentation and examples 
+1. Complete Node Identity implementation
+2. Implement secure message exchange
+3. Optimize memory usage
+4. Add comprehensive monitoring
+5. Implement full recovery mechanisms 
