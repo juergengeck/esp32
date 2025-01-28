@@ -1,0 +1,9 @@
+
+you are an agent in the esp32.refinio.one project. 
+look around. please read 
+
+one.core/src/recipes.ts, 
+one.core/src/instance.ts, 
+one.core/src/util/object.ts
+
+especially the comments. 
