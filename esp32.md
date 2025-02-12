@@ -3,65 +3,70 @@
 ## Overview
 Implementation of a basic ONE node on ESP32 microcontroller, serving as an IoT endpoint in the ONE ecosystem.
 
-## Development Setup
-### Dependencies
-- ../one.core - Core ONE functionality reference
-- ../one.models - ONE data models reference
-- ../one.baypass.replicant - ONE replication reference
+## Core Components
 
-### Build Configuration
-- Babel configuration for @refinio package addressing:
-  ```json
-  {
-    "plugins": [
-      ["module-resolver", {
-        "root": ["./src"],
-        "alias": {
-          "@refinio/one.core": "../one.core",
-          "@refinio/one.models": "../one.models",
-          "@refinio/one.baypass.replicant": "../one.baypass.replicant"
-        }
-      }]
-    ]
-  }
-  ```
+### 1. Identity Structure
+- Instance ID (UUID) as device's unique identifier
+- DID constructed using Instance ID (`did:one:<instance_id>`)
+- Integration with ONE identity system
+- Owner's public key for signature verification
 
-## Goals
-1. Create a minimal ONE node implementation
-2. Demonstrate basic ONE principles
-3. Establish foundation for future expansion
+### 2. Instance Management
+- Instance ID generation and persistence
+- DID resolution and verification
+- Capability-based access control
+- Signature verification using owner's public key
+- No private key storage on device (keys managed by owner's app)
+
+### 3. Communication
+#### Transport Layer
+- QUIC as primary transport protocol
+- BLE for local discovery and pairing
+- WiFi for main network connectivity
+
+#### Security
+- ONE-based authentication using DIDs
+- Signature verification of owner commands
+- End-to-end encryption using ONE protocols
+- Perfect forward secrecy
+
+### 4. Storage System
+- Encrypted storage using ONE protocols
+- Instance-based isolation
+- Public key storage
+- Atomic operations support
 
 ## Implementation Phases
 
-### Phase 0: ONE Object System
-- Create C library (libonecore) for ONE data types
-- Implement core object structures and operations
+### Phase 0: Core Identity System
+- Generate and manage Instance IDs
+- Implement DID construction and resolution
+- Create C++ library for ONE data types
 - Port essential type definitions from one.core
-- Implement HTML+Microdata serialization
-- Leverage ESP32 crypto hardware for object hashing
+- Leverage ESP32 crypto hardware for verification
 
 ### Phase 1: Basic Infrastructure
-- Set up ESP32 with necessary communications capabilities
+- Set up ESP32 with necessary communications
 - Implement basic storage handling
-- Establish basic node identity
-- Reference and adapt patterns from one.core where applicable
-- Integrate with libonecore
+- Establish instance identity and DID mapping
+- Store owner's public key
+- Reference and adapt patterns from one.core
 
 ### Phase 2: ONE Core Concepts
-- Implement basic HTML+Microdata object storage
+- Implement basic object storage
 - Create simple transaction handling
-- Implement basic Story and Plan objects
+- Implement Story and Plan objects
 - Set up hash-based object referencing
 
 ### Phase 3: Communication
-- Implement node discovery
-- Set up basic peer communication
-- Enable data synchronization capabilities
+- Implement instance discovery using DIDs
+- Set up QUIC transport
+- Enable data synchronization
 - Bridge interface to Node.js ONE implementation
 
 ### Phase 4: Integration
-- Connect with other ONE nodes
-- Implement basic Action handling
+- Connect with other ONE nodes using DIDs
+- Implement Action handling
 - Enable basic user interaction
 
 ## Technical Considerations
@@ -80,17 +85,10 @@ Implementation of a basic ONE node on ESP32 microcontroller, serving as an IoT e
    - Enable PSRAM if available for large datasets
    - Implement circular buffers for streaming data
 
-3. Buffer Management:
-   - WebSocket buffer size: 4KB default, configurable
-   - JSON document fragmentation: 2KB chunks
-   - File system buffer: 512 bytes per operation
-   - Stream buffer sizes: 256 bytes to 1KB based on operation
-
 ### Hardware Capabilities
 1. Crypto Acceleration:
-   - SHA-256 hardware acceleration
-   - AES-128/192/256
-   - RSA up to 4096 bits
+   - SHA-256 hardware acceleration for signature verification
+   - AES-128/192/256 for storage encryption
    - Hardware Random Number Generator
 
 2. Network:
@@ -103,68 +101,31 @@ Implementation of a basic ONE node on ESP32 microcontroller, serving as an IoT e
    - Optional SD card support
    - SPIFFS/LittleFS file systems
 
-## Build Verification
+## Security Model
+1. Key Management:
+   - Private keys stored and managed by owner's app
+   - Device only stores owner's public key
+   - All operations requiring signing done by owner's app
+   - Device verifies signatures using stored public key
 
-### Pre-build Checks
-1. Memory Configuration:
-   ```ini
-   build_flags =
-       -DCONFIG_SPIRAM_SUPPORT
-       -DCONFIG_SPIRAM_USE_MALLOC
-       -DCONFIG_SPIRAM_TYPE_AUTO
-       -DCONFIG_SPIRAM_SIZE=-1
-   ```
-
-2. Partition Table:
-   - Minimum 1MB for app
-   - 1MB for SPIFFS
-   - 32KB for NVS
-
-### Build Steps
-1. Clean Build:
-   ```bash
-   pio run --target clean
-   pio run
-   ```
-
-2. Memory Analysis:
-   ```bash
-   pio run --target size
-   ```
-
-3. Stack Analysis:
-   ```bash
-   pio check --pattern="src/*"
-   ```
-
-### Common Build Issues
-1. Memory Overflow:
-   - Symptom: Stack overflow or heap fragmentation
-   - Solution: Enable PSRAM or adjust buffer sizes
-
-2. Flash Size:
-   - Symptom: "Flash full" error
-   - Solution: Optimize partition table or reduce program size
-
-3. Compilation Errors:
-   - Symptom: C++ version mismatch
-   - Solution: Ensure -std=gnu++17 flag is set
-
-4. Link Errors:
-   - Symptom: Undefined references
-   - Solution: Check library dependencies and versions
+2. Trust Model:
+   - Device trusts owner's public key
+   - All commands must be signed by owner
+   - Device can be reset/replaced without key management concerns
+   - Compromise of device doesn't expose private keys
 
 ## Initial Focus
-1. Memory optimization for object system
-2. Efficient HTML+Microdata handling
+1. Instance ID and DID implementation
+2. Owner public key storage and verification
 3. Secure communication implementation
 4. Storage system optimization
 
 ## Questions to Address
-1. Storage strategy for HTML+Microdata objects
-2. Communication protocol details
-3. Memory management approach
-4. Security implementation
-5. Adaptation strategy for ONE patterns to embedded environment
-6. C library architecture and interface design
-7. Bridge protocol between ESP32 and Node.js implementation 
+1. Instance ID persistence strategy
+2. DID resolution and verification approach
+3. Communication protocol details
+4. Memory management approach
+5. Storage encryption strategy
+6. Adaptation strategy for ONE patterns
+7. C++ library architecture
+8. Bridge protocol between ESP32 and Node.js implementation 

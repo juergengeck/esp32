@@ -3,67 +3,216 @@
 #include <iomanip>
 #include <Base64.h>
 #include <ArduinoJson.h>
+#include "mbedtls/base64.h"
 
 namespace chum {
 
-std::vector<uint8_t> MessageSerializer::serializeMessage(const Message& msg) {
-    StaticJsonDocument<JSON_BUFFER_SIZE> doc;
-    
-    doc["sender"] = msg.sender;
-    doc["recipient"] = msg.recipient;
+std::vector<unsigned char> MessageSerializer::serializeMessage(const Message& msg) {
+    DynamicJsonDocument doc(2048);
+    doc["sender"] = msg.sender.c_str();
+    doc["recipient"] = msg.recipient.c_str();
     doc["sequence"] = msg.sequence;
-    doc["type"] = static_cast<uint8_t>(msg.type);
+    doc["type"] = static_cast<int>(msg.type);
     doc["timestamp"] = msg.timestamp;
     
-    std::string payloadBase64;
-    size_t encodedLength = Base64.encodedLength(msg.payload.size());
-    payloadBase64.resize(encodedLength);
-    Base64.encode((char*)payloadBase64.data(), (char*)msg.payload.data(), msg.payload.size());
-    doc["payload"] = payloadBase64;
+    // Base64 encode payload
+    size_t encodedLength;
+    std::vector<unsigned char> encodedPayload(msg.payload.size() * 2); // Ensure enough space
+    mbedtls_base64_encode(encodedPayload.data(), encodedPayload.size(), &encodedLength,
+                         msg.payload.data(), msg.payload.size());
+    doc["payload"] = String((char*)encodedPayload.data());
     
     if (!msg.signature.empty()) {
-        std::string signatureBase64;
-        encodedLength = Base64.encodedLength(msg.signature.size());
-        signatureBase64.resize(encodedLength);
-        Base64.encode((char*)signatureBase64.data(), (char*)msg.signature.data(), msg.signature.size());
-        doc["signature"] = signatureBase64;
+        std::vector<unsigned char> encodedSig(msg.signature.size() * 2);
+        size_t sigLength;
+        mbedtls_base64_encode(encodedSig.data(), encodedSig.size(), &sigLength,
+                             msg.signature.data(), msg.signature.size());
+        doc["signature"] = String((char*)encodedSig.data());
     }
     
-    std::string output;
+    String output;
     serializeJson(doc, output);
-    return std::vector<uint8_t>(output.begin(), output.end());
+    
+    return std::vector<unsigned char>(output.begin(), output.end());
 }
 
-std::optional<Message> MessageSerializer::deserializeMessage(const uint8_t* data, size_t len) {
-    StaticJsonDocument<JSON_BUFFER_SIZE> doc;
-    DeserializationError error = deserializeJson(doc, data, len);
+std::optional<Message> MessageSerializer::deserializeMessage(const uint8_t* data, size_t length) {
+    DynamicJsonDocument doc(2048);
+    DeserializationError error = deserializeJson(doc, data, length);
     
     if (error) {
         return std::nullopt;
     }
     
     Message msg;
-    msg.sender = doc["sender"].as<std::string>();
-    msg.recipient = doc["recipient"].as<std::string>();
-    msg.sequence = doc["sequence"].as<uint32_t>();
-    msg.type = static_cast<MessageType>(doc["type"].as<uint8_t>());
-    msg.timestamp = doc["timestamp"].as<uint64_t>();
+    const char* sender = doc["sender"] | "";
+    const char* recipient = doc["recipient"] | "";
+    msg.sender = std::string(sender);
+    msg.recipient = std::string(recipient);
+    msg.sequence = doc["sequence"] | 0;
+    msg.type = static_cast<MessageType>(doc["type"] | 0);
+    msg.timestamp = doc["timestamp"] | 0;
     
-    if (doc.containsKey("payload")) {
-        std::string payloadBase64 = doc["payload"].as<std::string>();
-        size_t decodedLength = Base64.decodedLength((char*)payloadBase64.c_str(), payloadBase64.length());
-        msg.payload.resize(decodedLength);
-        Base64.decode((char*)msg.payload.data(), (char*)payloadBase64.c_str(), payloadBase64.length());
+    // Decode payload from base64
+    const char* payloadBase64 = doc["payload"] | "";
+    if (strlen(payloadBase64) > 0) {
+        size_t decodedLength;
+        std::vector<unsigned char> decodedPayload(strlen(payloadBase64));
+        mbedtls_base64_decode(decodedPayload.data(), decodedPayload.size(), &decodedLength,
+                             (const unsigned char*)payloadBase64, strlen(payloadBase64));
+        msg.payload = std::vector<unsigned char>(decodedPayload.begin(), 
+                                               decodedPayload.begin() + decodedLength);
     }
     
+    // Decode signature if present
     if (doc.containsKey("signature")) {
-        std::string signatureBase64 = doc["signature"].as<std::string>();
-        size_t decodedLength = Base64.decodedLength((char*)signatureBase64.c_str(), signatureBase64.length());
-        msg.signature.resize(decodedLength);
-        Base64.decode((char*)msg.signature.data(), (char*)signatureBase64.c_str(), signatureBase64.length());
+        const char* signatureBase64 = doc["signature"] | "";
+        if (strlen(signatureBase64) > 0) {
+            size_t decodedLength;
+            std::vector<unsigned char> decodedSig(strlen(signatureBase64));
+            mbedtls_base64_decode(decodedSig.data(), decodedSig.size(), &decodedLength,
+                                 (const unsigned char*)signatureBase64, strlen(signatureBase64));
+            msg.signature = std::vector<unsigned char>(decodedSig.begin(),
+                                                     decodedSig.begin() + decodedLength);
+        }
     }
     
     return msg;
+}
+
+std::vector<unsigned char> MessageSerializer::serializeProfile(const ProfileData& profile) {
+    DynamicJsonDocument doc(4096);
+    doc["id"] = profile.id.c_str();
+    doc["personId"] = profile.personId.c_str();
+    doc["owner"] = profile.owner.c_str();
+    doc["profileId"] = profile.profileId.c_str();
+    doc["profileHash"] = profile.profileHash.c_str();
+    
+    JsonArray keysArray = doc.createNestedArray("keys");
+    for (const auto& key : profile.keys) {
+        keysArray.add(key.c_str());
+    }
+    
+    // Base64 encode certificate
+    size_t certEncodedLength;
+    std::vector<unsigned char> encodedCert(profile.certificate.size() * 2);
+    mbedtls_base64_encode(encodedCert.data(), encodedCert.size(), &certEncodedLength,
+                         profile.certificate.data(), profile.certificate.size());
+    doc["certificate"] = String((char*)encodedCert.data());
+    
+    // Base64 encode signature
+    if (!profile.signature.empty()) {
+        std::vector<unsigned char> encodedSig(profile.signature.size() * 2);
+        size_t sigLength;
+        mbedtls_base64_encode(encodedSig.data(), encodedSig.size(), &sigLength,
+                             profile.signature.data(), profile.signature.size());
+        doc["signature"] = String((char*)encodedSig.data());
+    }
+    
+    doc["timestamp"] = profile.timestamp;
+    
+    JsonArray certsArray = doc.createNestedArray("certificates");
+    for (const auto& cert : profile.certificates) {
+        JsonObject certObj = certsArray.createNestedObject();
+        certObj["id"] = cert.id.c_str();
+        
+        // Base64 encode certificate
+        size_t encodedLength;
+        std::vector<unsigned char> encodedCert(cert.certificate.size() * 2);
+        mbedtls_base64_encode(encodedCert.data(), encodedCert.size(), &encodedLength,
+                             cert.certificate.data(), cert.certificate.size());
+        certObj["certificate"] = String((char*)encodedCert.data());
+    }
+    
+    String output;
+    serializeJson(doc, output);
+    
+    return std::vector<unsigned char>(output.begin(), output.end());
+}
+
+std::optional<ProfileData> MessageSerializer::deserializeProfile(const uint8_t* data, size_t length) {
+    DynamicJsonDocument doc(4096);
+    DeserializationError error = deserializeJson(doc, data, length);
+    
+    if (error) {
+        return std::nullopt;
+    }
+    
+    ProfileData profile;
+    const char* id = doc["id"] | "";
+    const char* personId = doc["personId"] | "";
+    const char* owner = doc["owner"] | "";
+    const char* profileId = doc["profileId"] | "";
+    const char* profileHash = doc["profileHash"] | "";
+    
+    profile.id = std::string(id);
+    profile.personId = std::string(personId);
+    profile.owner = std::string(owner);
+    profile.profileId = std::string(profileId);
+    profile.profileHash = std::string(profileHash);
+    
+    JsonArray keysArray = doc["keys"].as<JsonArray>();
+    for (JsonVariant key : keysArray) {
+        const char* keyStr = key | "";
+        profile.keys.push_back(std::string(keyStr));
+    }
+    
+    // Decode certificate from base64
+    const char* certBase64 = doc["certificate"] | "";
+    if (strlen(certBase64) > 0) {
+        size_t decodedLength;
+        std::vector<unsigned char> decodedCert(strlen(certBase64));
+        mbedtls_base64_decode(decodedCert.data(), decodedCert.size(), &decodedLength,
+                             (const unsigned char*)certBase64, strlen(certBase64));
+        profile.certificate = std::vector<unsigned char>(decodedCert.begin(),
+                                                       decodedCert.begin() + decodedLength);
+    }
+    
+    // Decode signature if present
+    if (doc.containsKey("signature")) {
+        const char* signatureBase64 = doc["signature"] | "";
+        if (strlen(signatureBase64) > 0) {
+            size_t decodedLength;
+            std::vector<unsigned char> decodedSig(strlen(signatureBase64));
+            mbedtls_base64_decode(decodedSig.data(), decodedSig.size(), &decodedLength,
+                                 (const unsigned char*)signatureBase64, strlen(signatureBase64));
+            profile.signature = std::vector<unsigned char>(decodedSig.begin(),
+                                                         decodedSig.begin() + decodedLength);
+        }
+    }
+    
+    profile.timestamp = doc["timestamp"] | 0ULL;
+    
+    JsonArray certsArray = doc["certificates"].as<JsonArray>();
+    for (JsonObject certObj : certsArray) {
+        CertificateData cert;
+        const char* certId = certObj["id"] | "";
+        cert.id = std::string(certId);
+        
+        // Decode certificate from base64
+        const char* certBase64 = certObj["certificate"] | "";
+        if (strlen(certBase64) > 0) {
+            size_t decodedLength;
+            std::vector<unsigned char> decodedCert(strlen(certBase64));
+            mbedtls_base64_decode(decodedCert.data(), decodedCert.size(), &decodedLength,
+                                 (const unsigned char*)certBase64, strlen(certBase64));
+            cert.certificate = std::vector<unsigned char>(decodedCert.begin(),
+                                                        decodedCert.begin() + decodedLength);
+        }
+        
+        profile.certificates.push_back(cert);
+    }
+    
+    return profile;
+}
+
+// Helper functions
+String MessageSerializer::toArduinoString(const std::string& str) {
+    return String(str.c_str());
+}
+
+std::string MessageSerializer::toString(const String& str) {
+    return std::string(str.c_str());
 }
 
 void MessageSerializer::macToString(const uint8_t* mac, std::string& str) {
@@ -85,105 +234,31 @@ void MessageSerializer::stringToMac(const std::string& str, uint8_t* mac) {
     }
 }
 
-std::vector<uint8_t> MessageSerializer::serializeProfile(const ProfileData& profile) {
-    StaticJsonDocument<JSON_BUFFER_SIZE> doc;
-    
-    doc["id"] = profile.id;
-    doc["personId"] = profile.personId;
-    doc["owner"] = profile.owner;
-    doc["profileId"] = profile.profileId;
-    doc["profileHash"] = profile.profileHash;
-    doc["timestamp"] = profile.timestamp;
-    
-    JsonArray keysArray = doc.createNestedArray("keys");
-    for (const auto& key : profile.keys) {
-        keysArray.add(key);
-    }
-    
-    // Encode certificate and signature as base64
-    std::string certBase64;
-    size_t certEncodedLength = Base64.encodedLength(profile.certificate.size());
-    certBase64.resize(certEncodedLength);
-    Base64.encode((char*)certBase64.data(), (char*)profile.certificate.data(), profile.certificate.size());
-    doc["certificate"] = certBase64;
-    
-    std::string sigBase64;
-    size_t sigEncodedLength = Base64.encodedLength(profile.signature.size());
-    sigBase64.resize(sigEncodedLength);
-    Base64.encode((char*)sigBase64.data(), (char*)profile.signature.data(), profile.signature.size());
-    doc["signature"] = sigBase64;
-    
-    std::string output;
-    serializeJson(doc, output);
-    return std::vector<uint8_t>(output.begin(), output.end());
-}
-
-std::optional<ProfileData> MessageSerializer::deserializeProfile(const uint8_t* data, size_t len) {
-    StaticJsonDocument<JSON_BUFFER_SIZE> doc;
-    DeserializationError error = deserializeJson(doc, data, len);
-    
-    if (error) {
-        return std::nullopt;
-    }
-    
-    ProfileData profile;
-    profile.id = doc["id"].as<std::string>();
-    profile.personId = doc["personId"].as<std::string>();
-    profile.owner = doc["owner"].as<std::string>();
-    profile.profileId = doc["profileId"].as<std::string>();
-    profile.profileHash = doc["profileHash"].as<std::string>();
-    profile.timestamp = doc["timestamp"].as<uint64_t>();
-    
-    JsonArray keysArray = doc["keys"];
-    for (const auto& key : keysArray) {
-        profile.keys.push_back(key.as<std::string>());
-    }
-    
-    // Decode base64 certificate and signature
-    std::string certBase64 = doc["certificate"].as<std::string>();
-    size_t certDecodedLength = Base64.decodedLength((char*)certBase64.c_str(), certBase64.length());
-    profile.certificate.resize(certDecodedLength);
-    Base64.decode((char*)profile.certificate.data(), (char*)certBase64.c_str(), certBase64.length());
-    
-    std::string sigBase64 = doc["signature"].as<std::string>();
-    size_t sigDecodedLength = Base64.decodedLength((char*)sigBase64.c_str(), sigBase64.length());
-    profile.signature.resize(sigDecodedLength);
-    Base64.decode((char*)profile.signature.data(), (char*)sigBase64.c_str(), sigBase64.length());
-    
-    return profile;
-}
-
-std::vector<uint8_t> MessageSerializer::serializeCertificates(const std::vector<CertificateData>& certs) {
-    StaticJsonDocument<JSON_BUFFER_SIZE> doc;
+std::vector<unsigned char> MessageSerializer::serializeCertificates(const std::vector<CertificateData>& certs) {
+    DynamicJsonDocument doc(8192);
     JsonArray certsArray = doc.createNestedArray("certificates");
     
     for (const auto& cert : certs) {
         JsonObject certObj = certsArray.createNestedObject();
         certObj["id"] = cert.id;
         
-        std::string certBase64;
-        size_t encodedLength = Base64.encodedLength(cert.certificate.size());
-        certBase64.resize(encodedLength);
-        Base64.encode((char*)certBase64.data(), (char*)cert.certificate.data(), cert.certificate.size());
-        certObj["certificate"] = certBase64;
-        
-        std::string sigBase64;
-        encodedLength = Base64.encodedLength(cert.signature.size());
-        sigBase64.resize(encodedLength);
-        Base64.encode((char*)sigBase64.data(), (char*)cert.signature.data(), cert.signature.size());
-        certObj["signature"] = sigBase64;
-        
-        certObj["timestamp"] = cert.timestamp;
+        // Base64 encode certificate
+        size_t encodedLength;
+        std::vector<unsigned char> encodedCert(cert.certificate.size() * 2);
+        mbedtls_base64_encode(encodedCert.data(), encodedCert.size(), &encodedLength,
+                             cert.certificate.data(), cert.certificate.size());
+        certObj["certificate"] = String((char*)encodedCert.data());
     }
     
-    std::string output;
+    String output;
     serializeJson(doc, output);
-    return std::vector<uint8_t>(output.begin(), output.end());
+    
+    return std::vector<unsigned char>(output.begin(), output.end());
 }
 
-std::optional<std::vector<CertificateData>> MessageSerializer::deserializeCertificates(const uint8_t* data, size_t len) {
-    StaticJsonDocument<JSON_BUFFER_SIZE> doc;
-    DeserializationError error = deserializeJson(doc, data, len);
+std::optional<std::vector<CertificateData>> MessageSerializer::deserializeCertificates(const uint8_t* data, size_t length) {
+    DynamicJsonDocument doc(8192);
+    DeserializationError error = deserializeJson(doc, data, length);
     
     if (error) {
         return std::nullopt;
@@ -194,23 +269,21 @@ std::optional<std::vector<CertificateData>> MessageSerializer::deserializeCertif
     
     for (JsonObject certObj : certsArray) {
         CertificateData cert;
-        cert.id = certObj["id"].as<std::string>();
+        cert.id = certObj["id"].as<String>().c_str();
         
-        std::string certBase64 = certObj["certificate"].as<std::string>();
-        size_t decodedLength = Base64.decodedLength((char*)certBase64.c_str(), certBase64.length());
-        cert.certificate.resize(decodedLength);
-        Base64.decode((char*)cert.certificate.data(), (char*)certBase64.c_str(), certBase64.length());
+        // Decode certificate from base64
+        String certBase64 = certObj["certificate"].as<String>();
+        size_t decodedLength;
+        std::vector<unsigned char> decodedCert(certBase64.length());
+        mbedtls_base64_decode(decodedCert.data(), decodedCert.size(), &decodedLength,
+                             (const unsigned char*)certBase64.c_str(), certBase64.length());
+        cert.certificate = std::vector<unsigned char>(decodedCert.begin(),
+                                                    decodedCert.begin() + decodedLength);
         
-        std::string sigBase64 = certObj["signature"].as<std::string>();
-        decodedLength = Base64.decodedLength((char*)sigBase64.c_str(), sigBase64.length());
-        cert.signature.resize(decodedLength);
-        Base64.decode((char*)cert.signature.data(), (char*)sigBase64.c_str(), sigBase64.length());
-        
-        cert.timestamp = certObj["timestamp"].as<uint64_t>();
         certs.push_back(cert);
     }
     
     return certs;
 }
 
-} // namespace chum 
+} // namespace chum

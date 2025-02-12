@@ -22,6 +22,9 @@ public:
     static std::vector<uint8_t> serializeCertificates(const std::vector<CertificateData>& certs);
     static std::optional<std::vector<CertificateData>> deserializeCertificates(const uint8_t* data, size_t len);
 
+    // Helper functions
+    static String toArduinoString(const std::string& str);
+    static std::string toString(const String& str);
     static void macToString(const uint8_t* mac, std::string& str);
     static void stringToMac(const std::string& str, uint8_t* mac);
 
