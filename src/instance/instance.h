@@ -11,7 +11,7 @@ namespace instance {
 class Instance {
 public:
     static Instance& getInstance() {
-        static Instance instance("esp32", "0.1.0", "juergen.geck@gmx.de", "juergen.geck@gmx.de");
+        static Instance instance("1", "0.1.0", "juergen.geck@gmx.de", "juergen.geck@gmx.de");
         return instance;
     }
 
@@ -34,6 +34,11 @@ public:
     bool saveKeys();
     bool generateKeys();
     
+    // Credential-based name management
+    bool updateName(const String& newName, const String& signature);
+    bool loadNameFromCredential();
+    bool saveNameCredential();
+    
     // ID hash calculation
     String calculateOwnerIdHash() const;
     String calculateInstanceIdHash() const;
@@ -55,6 +60,8 @@ private:
     // Helper functions
     String sha256(const String& input) const;
     String sha256(const uint8_t* input, size_t length) const;
+    bool verifyOwnerSignature(const String& data, const String& signature) const;
+    String createNameCredential(const String& name) const;
 };
 
 } // namespace instance

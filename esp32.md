@@ -3,6 +3,41 @@
 ## Overview
 Implementation of a basic ONE node on ESP32 microcontroller, serving as an IoT endpoint in the ONE ecosystem.
 
+## Storage Optimization Plan
+
+### Current Storage Issues
+- Crypto library (1.5MB): Too large, using generic mbedTLS
+- Full QUIC stack: Would require significant storage
+- Complex BLE implementation: Uses considerable flash space
+
+### Optimization Strategy
+1. Crypto Optimization:
+   - Replace generic mbedTLS with ESP32 hardware crypto
+   - Use built-in SHA-256, AES, RNG capabilities
+   - Leverage hardware ECC for ECDSA P256
+
+2. Transport Layer Optimization:
+   - Replace QUIC with WebSocket over TLS
+   - Use HTTP/2 for data sync
+   - Minimize protocol overhead
+
+3. BLE Optimization:
+   - Implement minimal discovery
+   - Basic secure pairing only
+   - Credential exchange only
+   - No continuous BLE communication
+
+4. Bridge Protocol Optimization:
+   - Simple REST/WebSocket API
+   - Compact serialization format
+   - Minimal protocol overhead
+
+### Implementation Priority
+1. Switch to ESP32 hardware crypto
+2. Implement minimal BLE for pairing
+3. Add basic WebSocket connectivity
+4. Create lightweight bridge protocol
+
 ## Core Components
 
 ### 1. Identity Structure

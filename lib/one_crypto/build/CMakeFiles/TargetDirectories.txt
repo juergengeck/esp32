@@ -1,0 +1,4 @@
+/Users/gecko/src/esp32/lib/one_crypto/build/CMakeFiles/one_crypto.dir
+/Users/gecko/src/esp32/lib/one_crypto/build/CMakeFiles/mac_tool.dir
+/Users/gecko/src/esp32/lib/one_crypto/build/CMakeFiles/edit_cache.dir
+/Users/gecko/src/esp32/lib/one_crypto/build/CMakeFiles/rebuild_cache.dir

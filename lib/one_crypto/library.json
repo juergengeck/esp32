@@ -1,0 +1,22 @@
+{
+    "name": "OneCrypto",
+    "version": "0.1.0",
+    "description": "Shared crypto library for ONE project",
+    "keywords": "crypto, ecdsa, verifiable-credentials",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/yourusername/one_crypto.git"
+    },
+    "authors": [
+        {
+            "name": "Juergen Geck",
+            "email": "juergen.geck@gmx.de"
+        }
+    ],
+    "license": "MIT",
+    "dependencies": {
+        "mbedtls": "^3.4.1"
+    },
+    "frameworks": ["arduino", "native"],
+    "platforms": ["espressif32", "native"]
+} 

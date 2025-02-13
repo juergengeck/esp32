@@ -36,8 +36,6 @@ bool Instance::initialize() {
             uuid[10], uuid[11], uuid[12], uuid[13], uuid[14], uuid[15]);
     
     instanceId_ = String(uuidStr);
-    name_ = "esp32";
-    owner_ = "juergen.geck@gmx.de";
     did_ = "did:one:" + instanceId_;
     
     // Initialize credential manager with instance ID
@@ -45,6 +43,14 @@ bool Instance::initialize() {
     if (!credMgr.initialize(instanceId_.c_str(), owner_.c_str())) {
         Serial.println("Failed to initialize credential manager");
         return false;
+    }
+
+    // Try to load name from credential, if not found use default
+    if (!loadNameFromCredential()) {
+        name_ = "1";
+        if (!saveNameCredential()) {
+            Serial.println("Warning: Failed to save initial name credential");
+        }
     }
     
     initialized_ = true;
@@ -55,6 +61,117 @@ bool Instance::initialize() {
     Serial.printf("DID: %s\n", did_.c_str());
     
     return true;
+}
+
+bool Instance::updateName(const String& newName, const String& signature) {
+    // Create the message that was signed (name + instanceId)
+    String message = newName + instanceId_;
+    
+    // Verify the signature using credential manager
+    auto& credMgr = CredentialManager::getInstance();
+    if (!credMgr.verifyOwnerSignature(message, signature)) {
+        Serial.println("Invalid signature for name update");
+        return false;
+    }
+    
+    // Update the name
+    name_ = newName;
+    
+    // Save the new name credential
+    if (!saveNameCredential()) {
+        Serial.println("Warning: Failed to save updated name credential");
+        return false;
+    }
+    
+    Serial.println("Name updated successfully to: " + name_);
+    Serial.println("System will restart in 3 seconds...");
+    
+    // Stop BLE advertising and disconnect any clients
+    auto& bleDiscovery = BLEDiscovery::getInstance();
+    bleDiscovery.stopAdvertising();
+    bleDiscovery.disconnect();
+    
+    // Give some time for cleanup and messages to be sent
+    delay(3000);
+    
+    // Restart the ESP32
+    ESP.restart();
+    
+    return true; // This won't actually be reached due to restart
+}
+
+bool Instance::loadNameFromCredential() {
+    if (!SPIFFS.exists("/instance/name.vc")) {
+        return false;
+    }
+    
+    File file = SPIFFS.open("/instance/name.vc", "r");
+    if (!file) {
+        return false;
+    }
+    
+    String vcJson = file.readString();
+    file.close();
+    
+    // Parse and verify the credential
+    auto& credMgr = CredentialManager::getInstance();
+    if (!credMgr.verifyCredential(vcJson.c_str())) {
+        Serial.println("Invalid name credential");
+        return false;
+    }
+    
+    // Parse the credential to get the name
+    DynamicJsonDocument doc(1024);
+    DeserializationError error = deserializeJson(doc, vcJson);
+    if (error) {
+        return false;
+    }
+    
+    const char* name = doc["credentialSubject"]["name"] | "";
+    if (strlen(name) > 0) {
+        name_ = name;
+        return true;
+    }
+    
+    return false;
+}
+
+bool Instance::saveNameCredential() {
+    String vcJson = createNameCredential(name_);
+    
+    // Create directory if it doesn't exist
+    if (!SPIFFS.exists("/instance")) {
+        if (!SPIFFS.mkdir("/instance")) {
+            return false;
+        }
+    }
+    
+    File file = SPIFFS.open("/instance/name.vc", "w");
+    if (!file) {
+        return false;
+    }
+    
+    size_t written = file.print(vcJson);
+    file.close();
+    
+    return written == vcJson.length();
+}
+
+String Instance::createNameCredential(const String& name) const {
+    DynamicJsonDocument doc(1024);
+    
+    doc["@context"] = "https://www.w3.org/2018/credentials/v1";
+    doc["type"] = "VerifiableCredential";
+    doc["issuer"] = owner_;
+    doc["issuanceDate"] = "2024-01-01T00:00:00Z"; // TODO: Use real date
+    
+    JsonObject credentialSubject = doc.createNestedObject("credentialSubject");
+    credentialSubject["id"] = did_;
+    credentialSubject["name"] = name;
+    
+    String vcJson;
+    serializeJson(doc, vcJson);
+    return vcJson;
 }
 
 bool Instance::loadKeys() {
